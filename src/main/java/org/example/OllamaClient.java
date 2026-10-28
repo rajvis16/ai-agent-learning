@@ -24,6 +24,11 @@ public class OllamaClient {
         // This list exists for the duration of the conversation.
         List<Map<String, Object>> messages = new ArrayList<>();
 
+//        messages.add(Map.of(
+//                "role", "system",
+//                "content", "Answer each question in at most two short sentences."
+//        ));
+
         // Create one client and reuse it for all requests in this conversation.
         try (HttpClient client = HttpClient.newHttpClient()) {
 
@@ -73,6 +78,12 @@ public class OllamaClient {
                         .asText();
 
                 System.out.println("Model answer: " + answer);
+
+                int inputTokens = root.path("prompt_eval_count").asInt();
+                int outputTokens = root.path("eval_count").asInt();
+
+                System.out.println("Input tokens: " + inputTokens);
+                System.out.println("Output tokens: " + outputTokens);
 
                 Map<String, Object> assistantMessage = Map.of(
                         "role", "assistant",
