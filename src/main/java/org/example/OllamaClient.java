@@ -5,10 +5,13 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Scanner;
+import java.util.Iterator;
+import java.util.stream.Stream;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -52,7 +55,7 @@ public class OllamaClient {
                 Map<String, Object> requestData = Map.of(
                         "model", "qwen3:4b-instruct",
                         "messages", messages,
-                        "stream", false,
+                        "stream", true,
                         "think", false
                 );
 
@@ -66,28 +69,73 @@ public class OllamaClient {
                         .POST(HttpRequest.BodyPublishers.ofString(requestBody))
                         .build();
 
-                HttpResponse<String> response = client.send(
-                        request,
-                        HttpResponse.BodyHandlers.ofString()
-                );
 
-                JsonNode root = objectMapper.readTree(response.body());
+                long start = System.nanoTime();
 
-                String answer = root.path("message")
-                        .path("content")
-                        .asText();
+                HttpResponse<Stream<String>> response = client.send(request, HttpResponse.BodyHandlers.ofLines());
 
-                System.out.println("Model answer: " + answer);
+                StringBuilder fullAnswer = new StringBuilder();
+                JsonNode completion = null;
 
-                int inputTokens = root.path("prompt_eval_count").asInt();
-                int outputTokens = root.path("eval_count").asInt();
+                try (Stream<String> lines = response.body()) {
 
-                System.out.println("Input tokens: " + inputTokens);
-                System.out.println("Output tokens: " + outputTokens);
+                    if (response.statusCode() != 200) {
+                        throw new IllegalStateException("Ollama returned HTTP " + response.statusCode());
+                    }
+
+                    System.out.print("Model answer: ");
+
+                    Iterator<String> iterator = lines.iterator();
+
+                    while (iterator.hasNext()) {
+
+                        String line = iterator.next();
+
+                        if (line.isBlank()) {
+                            continue;
+                        }
+
+                        JsonNode chunk = objectMapper.readTree(line);
+
+                        if (chunk.has("error")) {
+                            throw new IllegalStateException(chunk.path("error").asText());
+                        }
+
+                        String text = chunk.path("message")
+                                .path("content")
+                                .asText("");
+
+                        // Display this piece immediately.
+                        System.out.print(text);
+                        System.out.flush();
+
+                        // Preserve it for the next conversation turn.
+                        fullAnswer.append(text);
+
+                        if (chunk.path("done").asBoolean()) {
+                            completion = chunk;
+                            break;
+                        }
+                    }
+                }
+
+                System.out.println();
+
+                Duration elapsed = Duration.ofNanos(System.nanoTime() - start);
+
+                System.out.println("Total response time in milliseconds: " + elapsed.toMillis());
+
+                if (completion == null) {
+                    throw new IllegalStateException("The response ended without a completion message.");
+                }
+
+                System.out.println("Input tokens: " + completion.path("prompt_eval_count").asInt());
+
+                System.out.println("Output tokens: " + completion.path("eval_count").asInt());
 
                 Map<String, Object> assistantMessage = Map.of(
                         "role", "assistant",
-                        "content", answer
+                        "content", fullAnswer.toString()
                 );
 
                 messages.add(assistantMessage);
