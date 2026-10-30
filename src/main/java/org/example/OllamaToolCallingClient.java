@@ -143,41 +143,43 @@
                         continue;
                     }
 
-                    // This exercise supports exactly one tool call.
-                    if (!toolCalls.isArray() || toolCalls.size() != 1) {
-                        throw new IllegalStateException("Expected exactly one tool call.");
+                    if (!toolCalls.isArray()) {
+                        throw new IllegalStateException("Expected tool_calls to be an array.");
                     }
 
-                    JsonNode function = toolCalls.get(0).path("function");
-                    String toolName = function.path("name").asString("");
+                    for (JsonNode toolCall : toolCalls) {
 
-                    // Only execute a tool we explicitly support.
-                    if (!"getOrderStatus".equals(toolName)) {
-                        throw new IllegalArgumentException("Unknown tool: " + toolName);
+                        JsonNode function = toolCall.path("function");
+
+                        String toolName = function.path("name").asString("");
+
+                        if (!"getOrderStatus".equals(toolName)) {
+                            throw new IllegalArgumentException("Unknown tool: " + toolName);
+                        }
+
+                        JsonNode orderIdNode = function.path("arguments").path("orderId");
+
+                        if (!orderIdNode.isString() || orderIdNode.asString().isBlank()) {
+                            throw new IllegalArgumentException(
+                                    "getOrderStatus requires a nonblank string orderId."
+                            );
+                        }
+
+                        String orderIdInResponse = orderIdNode.asString();
+                        String toolResult = getOrderStatus(orderIdInResponse);
+
+                        System.out.println("Executed tool: " + toolName);
+                        System.out.println("Order ID: " + orderIdInResponse);
+                        System.out.println("Tool result: " + toolResult);
+
+                        Map<String, Object> toolMessage = Map.of(
+                                "role", "tool",
+                                "tool_name", toolName,
+                                "content", toolResult
+                        );
+
+                        messages.add(toolMessage);
                     }
-
-                    JsonNode orderIdNode = function.path("arguments").path("orderId");
-
-                    if (!orderIdNode.isString() || orderIdNode.asString().isBlank()) {
-                        throw new IllegalArgumentException("getOrderStatus requires a nonblank string orderId.");
-                    }
-
-                    String orderIdInResponse = orderIdNode.asString();
-
-                    // Execute our Java method.
-                    String toolResult = getOrderStatus(orderIdInResponse);
-
-                    System.out.println("Executed tool: " + toolName);
-                    System.out.println("Order ID: " + orderIdInResponse);
-                    System.out.println("Tool result: " + toolResult);
-
-                    // Report what our Java method returned.
-                    Map<String, Object> toolMessage = Map.of(
-                            "role", "tool",
-                            "tool_name", toolName,
-                            "content", toolResult
-                    );
-                    messages.add(toolMessage);
 
                     Map<String, Object> followUpData = Map.of(
                             "model", "qwen3:4b-instruct",
