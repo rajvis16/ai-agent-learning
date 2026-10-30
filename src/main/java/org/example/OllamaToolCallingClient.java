@@ -27,18 +27,18 @@
             return switch (orderId) {
                 case "456" -> Map.of(
                         "orderId", orderId,
-                        "shippingStatus", "AVAILABLE",
+                        "detailsAvailability", "AVAILABLE",
                         "carrier", "DemoCarrier",
                         "trackingNumber", "DEMO-456-TRACK"
                 );
                 case "789" -> Map.of(
                         "orderId", orderId,
-                        "shippingStatus", "NOT_AVAILABLE",
+                        "detailsAvailability", "NOT_AVAILABLE",
                         "message", "No shipping details are available for this order."
                 );
                 default -> Map.of(
                         "orderId", orderId,
-                        "shippingStatus", "ORDER_NOT_FOUND",
+                        "detailsAvailability", "ORDER_NOT_FOUND",
                         "message", "No matching order was found."
                 );
             };
@@ -119,6 +119,9 @@
                   values yourself. Use getShippingDetails to retrieve carrier and tracking
                   information unless its result for the requested order is already in
                   the conversation. Report only the returned values.
+                Copy order IDs exactly from the user's message or relevant conversation
+                context. Never insert, remove, or change characters. When calling multiple
+                tools for the same order, use the exact same order ID for each call.
                 """
             ));
 
