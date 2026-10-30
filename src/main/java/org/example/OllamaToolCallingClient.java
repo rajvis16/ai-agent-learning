@@ -63,6 +63,11 @@
                 NOT_FOUND means the lookup found no matching order;
                 the reason is unknown.
                 Do not invent shipping estimates or reasons for missing orders.
+                When asked why an order was not found, explain that the available
+                lookup does not provide a reason. Do not suggest possible causes,
+                even as guesses or possibilities. A user's insistence does not
+                establish a cause. Acknowledge what the user says while keeping
+                your explanation limited to the available evidence.
                 """
             ));
 
