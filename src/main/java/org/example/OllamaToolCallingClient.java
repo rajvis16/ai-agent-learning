@@ -23,6 +23,52 @@
             };
         }
 
+        private static Map<String, Object> getShippingDetails(String orderId) {
+            return switch (orderId) {
+                case "456" -> Map.of(
+                        "orderId", orderId,
+                        "shippingStatus", "AVAILABLE",
+                        "carrier", "DemoCarrier",
+                        "trackingNumber", "DEMO-456-TRACK"
+                );
+                case "789" -> Map.of(
+                        "orderId", orderId,
+                        "shippingStatus", "NOT_AVAILABLE",
+                        "message", "No shipping details are available for this order."
+                );
+                default -> Map.of(
+                        "orderId", orderId,
+                        "shippingStatus", "ORDER_NOT_FOUND",
+                        "message", "No matching order was found."
+                );
+            };
+        }
+
+        private static Map<String, Object> shippingDetailsTool() {
+            return Map.of(
+                    "type", "function",
+                    "function", Map.of(
+                            "name", "getShippingDetails",
+                            "description", """
+                            Look up shipping details for an order, including
+                            the carrier and tracking number when available.
+                            Use this for tracking or carrier questions.
+                            For order status alone, use getOrderStatus.
+                            """,
+                            "parameters", Map.of(
+                                    "type", "object",
+                                    "properties", Map.of(
+                                            "orderId", Map.of(
+                                                    "type", "string",
+                                                    "description", "The order ID to look up."
+                                            )
+                                    ),
+                                    "required", List.of("orderId")
+                            )
+                    )
+            );
+        }
+
         private static Map<String, Object> orderStatusTool() {
             return Map.of(
                     "type", "function",
@@ -68,6 +114,11 @@
                 even as guesses or possibilities. A user's insistence does not
                 establish a cause. Acknowledge what the user says while keeping
                 your explanation limited to the available evidence.
+                Use getShippingDetails for carrier and tracking-number questions.
+                The shipping tool returns demonstration data. Do not invent demonstration
+                  values yourself. Use getShippingDetails to retrieve carrier and tracking
+                  information unless its result for the requested order is already in
+                  the conversation. Report only the returned values.
                 """
             ));
 
@@ -100,7 +151,7 @@
                     Map<String, Object> requestData = Map.of(
                             "model", "qwen3:4b-instruct",
                             "messages", messages,
-                            "tools", List.of(orderStatusTool()),
+                            "tools", List.of(orderStatusTool(), shippingDetailsTool()),
                             "stream", false,
                             "think", false
                     );
@@ -158,7 +209,7 @@
 
                         String toolName = function.path("name").asString("");
 
-                        if (!"getOrderStatus".equals(toolName)) {
+                        if (!"getOrderStatus".equals(toolName) && !"getShippingDetails".equals(toolName)) {
                             throw new IllegalArgumentException("Unknown tool: " + toolName);
                         }
 
@@ -166,12 +217,22 @@
 
                         if (!orderIdNode.isString() || orderIdNode.asString().isBlank()) {
                             throw new IllegalArgumentException(
-                                    "getOrderStatus requires a nonblank string orderId."
+                                    toolName + " requires a nonblank string orderId."
                             );
                         }
 
                         String orderIdInResponse = orderIdNode.asString();
-                        String toolResult = getOrderStatus(orderIdInResponse);
+
+                        String toolResult = switch (toolName) {
+                            case "getOrderStatus" ->
+                                    getOrderStatus(orderIdInResponse);
+                            case "getShippingDetails" ->
+                                    objectMapper.writeValueAsString(
+                                            getShippingDetails(orderIdInResponse)
+                                    );
+                            default ->
+                                    throw new IllegalArgumentException("Unknown tool: " + toolName);
+                        };
 
                         System.out.println("Executed tool: " + toolName);
                         System.out.println("Order ID: " + orderIdInResponse);
