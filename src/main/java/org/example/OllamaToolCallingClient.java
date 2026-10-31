@@ -15,7 +15,13 @@
 
     public class OllamaToolCallingClient {
 
+        private final static boolean simulateOrderServiceFailure = false;
+
         private static String getOrderStatus(String orderId) {
+            if (simulateOrderServiceFailure) {
+                throw new IllegalStateException("Order service is unavailable");
+            }
+
             return switch (orderId) {
                 case "456" -> "SHIPPED";
                 case "789" -> "PROCESSING";
@@ -122,6 +128,10 @@
                 Copy order IDs exactly from the user's message or relevant conversation
                 context. Never insert, remove, or change characters. When calling multiple
                 tools for the same order, use the exact same order ID for each call.
+                ORDER_LOOKUP_FAILED means the lookup could not be completed.
+                It does not mean the order was not found.
+                Explain that the status could not be retrieved.
+                Do not invent a status or promise when the service will recover.
                 """
             ));
 
@@ -156,7 +166,8 @@
                             "messages", messages,
                             "tools", List.of(orderStatusTool(), shippingDetailsTool()),
                             "stream", false,
-                            "think", false
+                            "think", false,
+                            "options", Map.of("temperature", 0)
                     );
 
                     String requestBody = objectMapper.writeValueAsString(requestData);
@@ -227,8 +238,20 @@
                         String orderIdInResponse = orderIdNode.asString();
 
                         String toolResult = switch (toolName) {
-                            case "getOrderStatus" ->
-                                    getOrderStatus(orderIdInResponse);
+                            case "getOrderStatus" -> {
+                                try {
+                                    yield getOrderStatus(orderIdInResponse);
+                                } catch (IllegalStateException e) {
+                                    System.err.println("Order lookup failed: " + e.getMessage());
+
+                                    yield objectMapper.writeValueAsString(Map.of(
+                                            "orderId", orderIdInResponse,
+                                            "error", "ORDER_LOOKUP_FAILED",
+                                            "message",
+                                            "Order service is unavailable. The order status is unknown."
+                                    ));
+                                }
+                            }
                             case "getShippingDetails" ->
                                     objectMapper.writeValueAsString(
                                             getShippingDetails(orderIdInResponse)
@@ -254,7 +277,8 @@
                             "model", "qwen3:4b-instruct",
                             "messages", messages,
                             "stream", false,
-                            "think", false
+                            "think", false,
+                            "options", Map.of("temperature", 0)
                     );
 
                     String followUpBody = objectMapper.writeValueAsString(followUpData);
