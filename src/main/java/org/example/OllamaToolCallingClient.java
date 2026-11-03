@@ -95,6 +95,39 @@
             );
         }
 
+        private static List<String> getOrders(String customerId) {
+            return switch (customerId) {
+                case "123" -> List.of("456");
+                case "124" -> List.of("789");
+                default -> List.of();
+            };
+        }
+
+        private static Map<String, Object> ordersTool() {
+            return Map.of(
+                    "type", "function",
+                    "function", Map.of(
+                            "name", "getOrders",
+                            "description", """
+                            Find the order IDs belonging to a customer.
+                            Use this when a customer ID is provided but
+                            the order IDs are not yet known.
+                            Returns an empty list if no orders are found.
+                            """,
+                            "parameters", Map.of(
+                                    "type", "object",
+                                    "properties", Map.of(
+                                            "customerId", Map.of(
+                                                    "type", "string",
+                                                    "description", "The customer ID to look up."
+                                            )
+                                    ),
+                                    "required", List.of("customerId")
+                            )
+                    )
+            );
+        }
+
         public static void main(String[] args) throws Exception {
 
             Scanner scanner = new Scanner(System.in);
@@ -107,7 +140,13 @@
                     "role", "system",
                     "content", """
                 Use the order lookup tool for order-status questions.
-                If the order ID is missing or ambiguous, ask for clarification.
+                            If a customer ID is provided and their order IDs are not known,
+                            use getOrders to retrieve them first.
+                            Customer IDs and order IDs are different identifiers.
+                            Use the returned order IDs for subsequent status or shipping lookups.
+                            If neither an order ID nor a customer ID is available, ask for clarification.
+                            If multiple orders are returned and the user means only one,
+                            ask which order they mean.
                 Report only facts supplied by the tool.
                 PROCESSING means the order is being processed;
                 no shipping date or estimate is available.
@@ -161,160 +200,147 @@
                             "content", question
                     ));
 
-                    Map<String, Object> requestData = Map.of(
-                            "model", "qwen3:4b-instruct",
-                            "messages", messages,
-                            "tools", List.of(orderStatusTool(), shippingDetailsTool()),
-                            "stream", false,
-                            "think", false,
-                            "options", Map.of("temperature", 0)
-                    );
+                    int maxModelCalls = 5;
+                    boolean answered = false;
 
-                    String requestBody = objectMapper.writeValueAsString(requestData);
-                    System.out.println("Request JSON: " + requestBody);
+                    for (int step = 1; step <= maxModelCalls; step++) {
+
+                        System.out.println("Agent step: " + step);
 
 
-                    HttpRequest request = HttpRequest.newBuilder()
-                            .uri(URI.create("http://localhost:11434/api/chat"))
-                            .header("Content-Type", "application/json")
-                            .POST(HttpRequest.BodyPublishers.ofString(requestBody))
-                            .build();
+                        Map<String, Object> requestData = Map.of(
+                                "model", "qwen3:4b-instruct",
+                                "messages", messages,
+                                "tools", List.of(orderStatusTool(), shippingDetailsTool(), ordersTool()),
+                                "stream", false,
+                                "think", false,
+                                "options", Map.of("temperature", 0)
+                        );
 
-                    HttpResponse<String> response = client.send(
-                            request,
-                            HttpResponse.BodyHandlers.ofString()
-                    );
+                        String requestBody = objectMapper.writeValueAsString(requestData);
 
-                    System.out.println("HTTP status: " + response.statusCode());
-                    System.out.println("Response JSON: " + response.body());
+                        System.out.println("Request JSON: " + requestBody);
 
-                    if (response.statusCode() != 200) {
-                        throw new IllegalStateException("Ollama returned HTTP " + response.statusCode());
-                    }
 
-                    JsonNode root = objectMapper.readTree(response.body());
+                        HttpRequest request = HttpRequest.newBuilder()
+                                .uri(URI.create("http://localhost:11434/api/chat"))
+                                .header("Content-Type", "application/json")
+                                .POST(HttpRequest.BodyPublishers.ofString(requestBody))
+                                .build();
 
-                    Map<?, ?> assistantMessage = objectMapper.treeToValue(
-                            root.path("message"),
-                            Map.class
-                    );
-                    messages.add(assistantMessage);
+                        HttpResponse<String> response = client.send(
+                                request,
+                                HttpResponse.BodyHandlers.ofString()
+                        );
 
-                    JsonNode toolCalls = root.path("message").path("tool_calls");
+                        System.out.println("HTTP status: " + response.statusCode());
+                        System.out.println("Response JSON: " + response.body());
 
-                    // No tool requested: display the model's answer and finish.
-                    if (toolCalls.isMissingNode() || (toolCalls.isArray() && toolCalls.isEmpty())) {
-
-                        String answer = root.path("message")
-                                .path("content")
-                                .asString("");
-
-                        System.out.println("Model answer: " + answer);
-                        continue;
-                    }
-
-                    if (!toolCalls.isArray()) {
-                        throw new IllegalStateException("Expected tool_calls to be an array.");
-                    }
-
-                    for (JsonNode toolCall : toolCalls) {
-
-                        JsonNode function = toolCall.path("function");
-
-                        String toolName = function.path("name").asString("");
-
-                        if (!"getOrderStatus".equals(toolName) && !"getShippingDetails".equals(toolName)) {
-                            throw new IllegalArgumentException("Unknown tool: " + toolName);
+                        if (response.statusCode() != 200) {
+                            throw new IllegalStateException("Ollama returned HTTP " + response.statusCode());
                         }
 
-                        JsonNode orderIdNode = function.path("arguments").path("orderId");
+                        JsonNode root = objectMapper.readTree(response.body());
 
-                        if (!orderIdNode.isString() || orderIdNode.asString().isBlank()) {
-                            throw new IllegalArgumentException(
-                                    toolName + " requires a nonblank string orderId."
-                            );
+                        Map<?, ?> assistantMessage = objectMapper.treeToValue(
+                                root.path("message"),
+                                Map.class
+                        );
+                        messages.add(assistantMessage);
+
+                        JsonNode toolCalls = root.path("message").path("tool_calls");
+
+                        // No tool requested: display the model's answer and finish.
+                        if (toolCalls.isMissingNode() || (toolCalls.isArray() && toolCalls.isEmpty())) {
+
+                            String answer = root.path("message")
+                                    .path("content")
+                                    .asString("");
+
+                            System.out.println("Model answer: " + answer);
+                            answered = true;
+                            break;
                         }
 
-                        String orderIdInResponse = orderIdNode.asString();
+                        if (!toolCalls.isArray()) {
+                            throw new IllegalStateException("Expected tool_calls to be an array.");
+                        }
 
-                        String toolResult = switch (toolName) {
-                            case "getOrderStatus" -> {
-                                try {
-                                    yield getOrderStatus(orderIdInResponse);
-                                } catch (IllegalStateException e) {
-                                    System.err.println("Order lookup failed: " + e.getMessage());
+                        for (JsonNode toolCall : toolCalls) {
 
-                                    yield objectMapper.writeValueAsString(Map.of(
-                                            "orderId", orderIdInResponse,
-                                            "error", "ORDER_LOOKUP_FAILED",
-                                            "message",
-                                            "Order service is unavailable. The order status is unknown."
-                                    ));
-                                }
+                            JsonNode function = toolCall.path("function");
+
+                            String toolName = function.path("name").asString("");
+
+                            String argumentName = switch (toolName) {
+                                case "getOrders" -> "customerId";
+                                case "getOrderStatus", "getShippingDetails" -> "orderId";
+                                default -> throw new IllegalArgumentException(
+                                        "Unknown tool: " + toolName
+                                );
+                            };
+
+                            JsonNode argumentNode = function.path("arguments").path(argumentName);
+
+                            if (!argumentNode.isString() || argumentNode.asString().isBlank()) {
+                                throw new IllegalArgumentException(
+                                        toolName + " requires a nonblank string " + argumentName
+                                );
                             }
-                            case "getShippingDetails" ->
-                                    objectMapper.writeValueAsString(
-                                            getShippingDetails(orderIdInResponse)
-                                    );
-                            default ->
-                                    throw new IllegalArgumentException("Unknown tool: " + toolName);
-                        };
 
-                        System.out.println("Executed tool: " + toolName);
-                        System.out.println("Order ID: " + orderIdInResponse);
-                        System.out.println("Tool result: " + toolResult);
+                            String argumentValue = argumentNode.asString();
 
-                        Map<String, Object> toolMessage = Map.of(
-                                "role", "tool",
-                                "tool_name", toolName,
-                                "content", toolResult
+                            String toolResult = switch (toolName) {
+
+                                case "getOrders" -> objectMapper.writeValueAsString(getOrders(argumentValue));
+
+                                case "getOrderStatus" -> {
+                                    try {
+                                        yield getOrderStatus(argumentValue);
+                                    } catch (IllegalStateException e) {
+                                        System.err.println("Order lookup failed: " + e.getMessage());
+
+                                        yield objectMapper.writeValueAsString(Map.of(
+                                                "orderId", argumentValue,
+                                                "error", "ORDER_LOOKUP_FAILED",
+                                                "message",
+                                                "Order service is unavailable. The order status is unknown."
+                                        ));
+                                    }
+                                }
+
+                                case "getShippingDetails" -> objectMapper.writeValueAsString(
+                                        getShippingDetails(argumentValue)
+                                );
+
+                                default -> throw new IllegalArgumentException(
+                                        "Unknown tool: " + toolName
+                                );
+                            };
+
+                            System.out.println("Executed tool: " + toolName);
+                            System.out.println(argumentName + ": " + argumentValue);
+                            System.out.println("Tool result: " + toolResult);
+                            Map<String, Object> toolMessage = Map.of(
+                                    "role", "tool",
+                                    "tool_name", toolName,
+                                    "content", toolResult
+                            );
+
+                            messages.add(toolMessage);
+                        } // End tool-execution loop.
+                    } // End bounded agent loop.
+
+                    if (!answered) {
+                        System.out.println(
+                                "Agent stopped after " + maxModelCalls
+                                        + " model calls without a final answer."
                         );
-
-                        messages.add(toolMessage);
                     }
+                } // End console loop.
 
-                    Map<String, Object> followUpData = Map.of(
-                            "model", "qwen3:4b-instruct",
-                            "messages", messages,
-                            "stream", false,
-                            "think", false,
-                            "options", Map.of("temperature", 0)
-                    );
+            } // Close HttpClient.
 
-                    String followUpBody = objectMapper.writeValueAsString(followUpData);
-                    System.out.println("Follow-up JSON: " + followUpBody);
+        } // End main.
 
-                    HttpRequest followUpRequest = HttpRequest.newBuilder()
-                            .uri(URI.create("http://localhost:11434/api/chat"))
-                            .header("Content-Type", "application/json")
-                            .POST(HttpRequest.BodyPublishers.ofString(followUpBody))
-                            .build();
-
-                    HttpResponse<String> finalResponse = client.send(
-                            followUpRequest,
-                            HttpResponse.BodyHandlers.ofString()
-                    );
-
-                    if (finalResponse.statusCode() != 200) {
-                        throw new IllegalStateException(
-                                "Ollama returned HTTP " + finalResponse.statusCode()
-                        );
-                    }
-
-                    JsonNode finalRoot = objectMapper.readTree(finalResponse.body());
-
-                    messages.add(objectMapper.treeToValue(
-                            finalRoot.path("message"),
-                            Map.class
-                    ));
-
-                    String answer = finalRoot.path("message")
-                            .path("content")
-                            .asString("");
-
-                    System.out.println("Model answer: " + answer);
-
-                }
-            }
-        }
-    }
+    } // End class.
